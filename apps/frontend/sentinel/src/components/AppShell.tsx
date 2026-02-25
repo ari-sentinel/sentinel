@@ -21,7 +21,7 @@ import { useThemeStore } from '../store/theme-store';
 import { Logo } from './ui/Logo';
 
 interface AppShellProps extends PropsWithChildren {
-  title: string;
+  title: ReactNode;
   subtitle?: string;
   actions?: ReactNode;
   contentClassName?: string;

@@ -103,6 +103,22 @@ read_env_value() {
   awk -F= -v k="$key" '$1 == k {print substr($0, index($0, "=") + 1)}' "$file" | tail -n 1
 }
 
+set_env_value() {
+  local file="$1" key="$2" value="$3"
+  local tmp
+  tmp="$(mktemp "/tmp/sentinel_env_${key}.XXXXXX")"
+  awk -F= -v k="$key" -v v="$value" '
+    BEGIN {updated=0}
+    $1 == k {print k"="v; updated=1; next}
+    {print}
+    END {
+      if (!updated) print k"="v
+    }
+  ' "$file" > "$tmp"
+  mv "$tmp" "$file"
+  chmod 600 "$file"
+}
+
 prompt_default() {
   local label="$1" default="$2" value
   printf "%s" "$CURSOR_ON" >&2
@@ -339,6 +355,103 @@ action_delete() {
   return 0
 }
 
+action_reset_auth() {
+  ensure_docker_ready || return 0
+  local inst=""
+  rm -f "$TMP_PICK"
+  if pick_instance_interactive; then
+    inst=$(cat "$TMP_PICK")
+  fi
+  [[ -z "$inst" ]] && return 0
+
+  local mode_options=(
+    "${ICON_RESTART}  Credentials Only (keep JWT sessions)"
+    "${ICON_RESTART}  Full Auth Reset (rotate JWT + force re-login)"
+    "⬅️  Go Back"
+  )
+  select_option "RESET AUTH • $inst" "${mode_options[@]}"
+  local mode_idx=$?
+  if [[ "$mode_idx" -eq 2 ]]; then
+    return 0
+  fi
+
+  local full_reset=false
+  if [[ "$mode_idx" -eq 1 ]]; then
+    full_reset=true
+  fi
+
+  echo -n "$CURSOR_ON"
+  printf "\n${YELLOW}${BOLD}AUTH RESET FOR INSTANCE '${inst}'${RESET}\n"
+  if [[ "$full_reset" == "true" ]]; then
+    warn "This will rotate bootstrap key, clear platform API keys, rotate JWT secret, and restart auth services."
+  else
+    warn "This will rotate bootstrap key, clear platform API keys, and restart araios-backend."
+  fi
+  read -r -p "Type RESET to confirm: " confirm < /dev/tty
+  echo -n "$CURSOR_OFF"
+  if [[ "$confirm" != "RESET" ]]; then
+    info "Aborted."
+    return 0
+  fi
+
+  local ef db_user db_name new_bootstrap new_jwt
+  ef="$(instance_env_file "$inst")"
+  if [[ ! -f "$ef" ]]; then
+    error "Missing instance env file: $ef"
+    return 0
+  fi
+  db_user="$(read_env_value "$ef" "POSTGRES_USER" || echo "arai_stack")"
+  db_name="$(read_env_value "$ef" "POSTGRES_DB" || echo "arai_stack")"
+  new_bootstrap="$(generate_secret 16)"
+  set_env_value "$ef" "PLATFORM_BOOTSTRAP_API_KEY" "$new_bootstrap"
+
+  if [[ "$full_reset" == "true" ]]; then
+    new_jwt="$(generate_secret 32)"
+    set_env_value "$ef" "JWT_SECRET_KEY" "$new_jwt"
+  fi
+
+  info "Starting required services for '$inst'..."
+  if ! compose_instance "$inst" up -d postgres araios-backend >/dev/null 2>&1; then
+    error "Could not start required services."
+    return 0
+  fi
+
+  info "Clearing platform API keys in database..."
+  if ! compose_instance "$inst" exec -T postgres psql -v ON_ERROR_STOP=1 -U "$db_user" -d "$db_name" \
+    -c "DELETE FROM platform_api_keys;" >/dev/null 2>&1; then
+    error "Failed to clear platform_api_keys table."
+    warn "Auth reset is incomplete. Verify DB credentials and service health, then retry."
+    return 0
+  fi
+
+  if [[ "$full_reset" == "true" ]]; then
+    info "Recreating araios-backend and sentinel-backend with new auth settings..."
+    if ! compose_instance "$inst" up -d --force-recreate araios-backend sentinel-backend >/dev/null 2>&1; then
+      error "Failed to recreate backend services."
+      return 0
+    fi
+  else
+    info "Recreating araios-backend to reseed bootstrap key..."
+    if ! compose_instance "$inst" up -d --force-recreate araios-backend >/dev/null 2>&1; then
+      error "Failed to recreate araios-backend."
+      return 0
+    fi
+  fi
+
+  local port
+  port="$(read_env_value "$ef" "STACK_PORT" || echo "4747")"
+  success "Auth reset complete for '$inst'."
+  printf "\n${CYAN}${BOLD}🔐  N E W   B O O T S T R A P   T O K E N${RESET}\n"
+  printf "${DIM}---------------------------------------${RESET}\n"
+  printf "Gateway: ${MAGENTA}http://localhost:$port/${RESET}\n"
+  printf "Bootstrap token: ${YELLOW}${BOLD}${new_bootstrap}${RESET}\n"
+  if [[ "$full_reset" == "true" ]]; then
+    printf "${YELLOW}All existing JWT sessions are invalid after JWT secret rotation.${RESET}\n"
+  fi
+  printf "${DIM}---------------------------------------${RESET}\n"
+  return 0
+}
+
 menu_loop() {
   local options=(
     "${ICON_CONFIG}  New/Edit Instance"
@@ -346,6 +459,7 @@ menu_loop() {
     "${ICON_STOP}  Stop Instance"
     "${ICON_LIST}  Global Status"
     "📜  Tail Logs"
+    "${ICON_RESTART}  Reset Instance Auth"
     "🗑️   Delete Instance"
     "🚪  Exit"
   )
@@ -363,8 +477,9 @@ menu_loop() {
       2) action_down ;;
       3) action_list ;;
       4) action_logs ;;
-      5) action_delete ;;
-      6) echo "Goodbye!"; exit 0 ;;
+      5) action_reset_auth ;;
+      6) action_delete ;;
+      7) echo "Goodbye!"; exit 0 ;;
     esac
     
     # BUFFER FLUSH: Prevents skipping the "Press Enter" prompt due to trailing characters from Docker

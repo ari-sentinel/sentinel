@@ -29,6 +29,7 @@ import { SpawnSubAgentModal } from '../components/SpawnSubAgentModal';
 import { JsonBlock } from '../components/ui/JsonBlock';
 import { Panel } from '../components/ui/Panel';
 import { StatusChip } from '../components/ui/StatusChip';
+import { Dropdown } from '../components/ui/Dropdown';
 import { WS_BASE_URL } from '../lib/env';
 import { formatCompactDate, toPrettyJson, truncate } from '../lib/format';
 import { api } from '../lib/api';
@@ -1000,8 +1001,21 @@ export function SessionsPage() {
 
   return (
       <AppShell
-          title={activeSession?.title || 'Untitled Session'}
-          subtitle={activeSession ? `ID: ${activeSession.id.slice(0, 8)} • ${activeSession.status}` : 'Operator Workspace'}
+          title={
+            <Dropdown
+              options={sessions.map(s => ({
+                id: s.id,
+                label: s.title || 'Untitled Session',
+                description: `${formatCompactDate(s.started_at)} • ${s.status}`,
+                icon: <History size={12} className="text-[color:var(--text-muted)]" />
+              }))}
+              value={activeSessionId || ''}
+              onChange={onSessionClick}
+              triggerClassName="!bg-transparent !border-none !px-0 !h-auto text-sm font-semibold normal-case tracking-normal hover:!text-[color:var(--accent-solid)] transition-colors"
+              align="left"
+            />
+          }
+          subtitle={activeSession ? `ID: ${activeSession.id.slice(0, 8)}` : 'Operator Workspace'}
           contentClassName="h-full !p-0 overflow-hidden"
           actions={
             <div className="flex items-center gap-2">
@@ -1176,34 +1190,25 @@ export function SessionsPage() {
                 <div className="w-px h-3 bg-[color:var(--border)]" />
 
                 {/* --- Effort selector (Fast / Normal / Hard) --- */}
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-[color:var(--text-muted)]">Effort:</span>
-                  <div className="flex items-center rounded-lg bg-[color:var(--surface-2)] p-0.5 gap-0.5">
-                    {models.map(m => {
-                      const active = selectedModel === m.id;
-                      const tier = m.tier ?? 'normal';
-                      const colors: Record<string, { text: string; bg: string }> = {
-                        fast: { text: 'text-emerald-500', bg: 'bg-emerald-500/10 border-emerald-500/30' },
-                        normal: { text: 'text-sky-500', bg: 'bg-sky-500/10 border-sky-500/30' },
-                        hard: { text: 'text-amber-500', bg: 'bg-amber-500/10 border-amber-500/30' },
-                      };
-                      const c = colors[tier] ?? { text: 'text-[color:var(--text-primary)]', bg: 'bg-[color:var(--surface-0)]' };
-                      return (
-                        <button
-                          key={m.id}
-                          onClick={() => setSelectedModel(m.id)}
-                          className={`px-2.5 h-6 text-[10px] font-bold uppercase tracking-widest rounded-md transition-all duration-200 border ${
-                            active
-                              ? `${c.bg} ${c.text} shadow-sm`
-                              : 'border-transparent text-[color:var(--text-muted)] hover:text-[color:var(--text-secondary)] hover:bg-[color:var(--surface-0)]/50'
-                          }`}
-                        >
-                          {m.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
+                <Dropdown
+                  label="Effort:"
+                  options={models.map(m => {
+                    const tier = m.tier ?? 'normal';
+                    const colors: Record<string, string> = {
+                      fast: 'text-emerald-500',
+                      normal: 'text-sky-500',
+                      hard: 'text-amber-500',
+                    };
+                    return {
+                      id: m.id,
+                      label: m.label,
+                      description: m.description,
+                      icon: <Bot size={12} className={colors[tier] || 'text-[color:var(--text-muted)]'} />
+                    };
+                  })}
+                  value={selectedModel}
+                  onChange={setSelectedModel}
+                />
 
                 <div className="w-px h-3 bg-[color:var(--border)]" />
 
@@ -1240,18 +1245,17 @@ export function SessionsPage() {
 
                 <div className="w-px h-3 bg-[color:var(--border)]" />
 
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-[color:var(--text-muted)]">Steps:</span>
-                  <select
-                      value={maxIterations}
-                      onChange={(e) => setMaxIterations(Number(e.target.value))}
-                      className="bg-transparent text-xs font-semibold outline-none cursor-pointer hover:text-[color:var(--accent-solid)] transition-colors"
-                  >
-                    {[5, 10, 15, 20, 25, 30, 50, 75, 100].map(n => (
-                      <option key={n} value={n}>{n}</option>
-                    ))}
-                  </select>
-                </div>
+                <Dropdown
+                  label="Steps:"
+                  options={[5, 10, 15, 20, 25, 30, 50, 75, 100].map(n => ({
+                    id: String(n),
+                    label: String(n),
+                    description: n < 20 ? 'Fast execution' : n < 50 ? 'Standard depth' : 'Maximum thoroughness'
+                  }))}
+                  value={String(maxIterations)}
+                  onChange={(val) => setMaxIterations(Number(val))}
+                  triggerClassName="w-16"
+                />
               </div>
             </div>
 
